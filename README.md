@@ -19,9 +19,10 @@ Release v5.0.0
 -
 
 ## Credits
-
+### **This project is based on the original Premium Deluxe Motorsport mod created by ImNotMentaL.** 
+My version updates, rewrites, and fixes parts of the original mod, but full credit for the original concept and foundation goes to ImNotMentaL.
 ### Primary Credits
-- **Im Not MentaL**
+- **Im Not MentaL** 
 - **Rockstar Games**
 - **Alexander Blade** for **ScriptHookV**
 - **crosire** for **Community ScriptHookVDotNet**
