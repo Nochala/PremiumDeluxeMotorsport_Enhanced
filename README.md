@@ -23,6 +23,7 @@ Release v5.0.0
 - **Rockstar Games**
 - **Alexander Blade** for **ScriptHookV**
 - **crosire** for **Community ScriptHookVDotNet**
+- **Chiheb-Bacha** for **Script Hook V .Net Enhanced **
 - **justalemon** for **LemonUI**
 
 ### Contributors
