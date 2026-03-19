@@ -1,4 +1,4 @@
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public class CameraClamp
     {

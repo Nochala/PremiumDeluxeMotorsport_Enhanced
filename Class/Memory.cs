@@ -1,7 +1,7 @@
 using System.Drawing;
 using GTA;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public class Memory
     {

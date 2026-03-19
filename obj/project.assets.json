@@ -14,9 +14,9 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "D:\\VirtualStudioProjects\\PremiumDeluxeMotorsport.NET-master\\PremiumDeluxeMotorsportCarDealership5\\PDMCD4.csproj",
-      "projectName": "PDMCD5",
-      "projectPath": "D:\\VirtualStudioProjects\\PremiumDeluxeMotorsport.NET-master\\PremiumDeluxeMotorsportCarDealership5\\PDMCD4.csproj",
+      "projectUniqueName": "D:\\VirtualStudioProjects\\PremiumDeluxeMotorsport.NET-master\\PremiumDeluxeMotorsportCarDealership5\\PremiumDeluxeRevamped.csproj",
+      "projectName": "PremiumDeluxeRevamped",
+      "projectPath": "D:\\VirtualStudioProjects\\PremiumDeluxeMotorsport.NET-master\\PremiumDeluxeMotorsportCarDealership5\\PremiumDeluxeRevamped.csproj",
       "packagesPath": "C:\\Users\\Ethan\\.nuget\\packages\\",
       "outputPath": "D:\\VirtualStudioProjects\\PremiumDeluxeMotorsport.NET-master\\PremiumDeluxeMotorsportCarDealership5\\obj\\",
       "projectStyle": "PackageReference",

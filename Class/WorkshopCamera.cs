@@ -1,14 +1,14 @@
-using System;
-using System.Drawing;
-using System.Reflection;
 using GTA;
 using GTA.Math;
 using GTA.Native;
 using LemonUI;
 using LemonUI.Tools;
+using System;
+using System.Drawing;
+using System.Reflection;
 using Control = GTA.Control;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public enum CameraPosition
     {
@@ -75,6 +75,8 @@ namespace PDMCD4
         }
 
         public Vector3 Rotation => _mainCamera?.Rotation ?? Vector3.Zero;
+
+        public bool IsDragging => _isDragging;
 
         public CameraRotationMode RotationMode
         {
@@ -143,7 +145,7 @@ namespace PDMCD4
         public bool IsMouseInMenu()
         {
             PointF topLeft = SafeZone.GetSafePosition(new PointF(0f, 0f));
-            SizeF size = new SizeF(431f / GameScreen.AbsoluteResolution.Width, 550f / GameScreen.AbsoluteResolution.Height);
+            SizeF size = new SizeF(431f, 550f);
             return GameScreen.IsCursorInArea(topLeft, size);
         }
 

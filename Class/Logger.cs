@@ -2,31 +2,62 @@ using System;
 using System.IO;
 using GTA.Math;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public static class Logger
     {
+        private static readonly object SyncRoot = new object();
+        private static bool _sessionPrepared;
+
         public static bool Enabled => Helper.optLogging;
+
+        private static string LogDirectory => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PremiumDeluxeMotorsport");
+        private static string LogFilePath => Path.Combine(LogDirectory, "PDM.log");
+        private static string PinPointFilePath => Path.Combine(LogDirectory, "PinPoint.log");
 
         public static void Log(object message)
         {
-            if (Enabled)
+            if (!Enabled)
             {
-                File.AppendAllText(@".\PDM.log", $"{DateTime.Now}:{message}{Environment.NewLine}");
+                return;
             }
+
+            AppendLine(LogFilePath, message);
         }
 
         public static void PinPoint(Vector3 message)
         {
-            File.AppendAllText(
-                @".\PinPoint.log",
-                string.Format(
-                    "{0}:{1},{2},{3}{4}",
-                    DateTime.Now,
-                    message.X,
-                    message.Y,
-                    message.Z,
-                    Environment.NewLine));
+            AppendLine(PinPointFilePath, $"{message.X},{message.Y},{message.Z}");
+        }
+
+        private static void AppendLine(string filePath, object message)
+        {
+            try
+            {
+                lock (SyncRoot)
+                {
+                    PrepareSessionFiles();
+                    File.AppendAllText(filePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}: {message}{Environment.NewLine}");
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void PrepareSessionFiles()
+        {
+            if (_sessionPrepared)
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(LogDirectory);
+
+            try { File.WriteAllText(LogFilePath, string.Empty); } catch { }
+            try { File.WriteAllText(PinPointFilePath, string.Empty); } catch { }
+
+            _sessionPrepared = true;
         }
     }
 

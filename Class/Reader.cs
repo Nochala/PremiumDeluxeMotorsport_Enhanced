@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public class Reader
     {

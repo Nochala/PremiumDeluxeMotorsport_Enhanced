@@ -1,0 +1,12 @@
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\bin\Release\PDMCDR.dll
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\bin\Release\PDMCDR.pdb
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\bin\Release\LemonUI.SHVDN3.dll
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\bin\Release\ScriptHookVDotNet3.dll
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\bin\Release\LemonUI.SHVDN3.pdb
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\bin\Release\LemonUI.SHVDN3.xml
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\obj\x64\Release\PDMCDR.csproj.AssemblyReference.cache
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\obj\x64\Release\PDMCDR.GeneratedMSBuildEditorConfig.editorconfig
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\obj\x64\Release\PDMCDR.csproj.CoreCompileInputs.cache
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\obj\x64\Release\PDMCDR.csproj.Up2Date
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\obj\x64\Release\PDMCDR.dll
+D:\VirtualStudioProjects\PremiumDeluxeMotorsport.NET-master\PremiumDeluxeMotorsportCarDealership5\obj\x64\Release\PDMCDR.pdb

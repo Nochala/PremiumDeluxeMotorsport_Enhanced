@@ -3,7 +3,7 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public static class CutsceneManager
     {

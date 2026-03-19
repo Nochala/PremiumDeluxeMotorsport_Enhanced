@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using GTA.Math;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public class Interior
     {

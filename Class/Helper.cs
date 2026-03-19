@@ -10,7 +10,7 @@ using GTA.Native;
 using LemonUI.Scaleform;
 using Control = GTA.Control;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public static class Helper
     {
@@ -27,6 +27,7 @@ namespace PDMCD4
         public static string optLastVehName = null;
         public static string optLastVehMake = null;
         public static bool optLogging = true;
+        public static bool optEnableMouse = false;
         public static Control keyZoom = Control.NextCamera;
         public static Control keyDoor = Control.ParachuteBrakeLeft;
         public static Control keyRoof = Control.VehicleRoof;
@@ -70,6 +71,7 @@ namespace PDMCD4
             optLastVehHash = config.GetValue("SETTINGS", "LASTVEHHASH", -2022483795);
             optLastVehName = config.GetValue("SETTINGS", "LASTVEHNAME", "Pfister Comet Retro Custom");
             optLogging = config.GetValue("SETTINGS", "LOGGING", true);
+            optEnableMouse = config.GetValue("SETTINGS", "ENABLEMOUSE", false);
             keyZoom = config.GetValue("CONTROLS", "ZOOM", Control.FrontendRt);
             keyDoor = config.GetValue("CONTROLS", "DOOR", Control.ParachuteBrakeLeft);
             keyRoof = config.GetValue("CONTROLS", "ROOF", Control.ParachuteBrakeRight);

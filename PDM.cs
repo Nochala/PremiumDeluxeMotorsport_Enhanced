@@ -8,11 +8,21 @@ using LemonUI.Menus;
 using LemonUI.Scaleform;
 using GtaScreen = GTA.UI.Screen;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public class PDM : Script
     {
         private static string Gxt(string key) => Game.GetLocalizedString(key);
+
+        private const float PdmPedChairSearchRadius = 3.0f;
+        private const float PdmPedSeatSnapDistance = 0.65f;
+        private const int PdmPedSeatRetryIntervalMs = 1500;
+        private static readonly Vector3 PdmChairSeatOffset = new Vector3(0.0f, -0.04f, 0.52f);
+        private const float PdmDoorGreetingDistance = 4.75f;
+        private const int PdmPedGreetingCooldownMs = 6000;
+        private static int pdmPedNextSeatRetryAt;
+        private static int pdmPedNextGreetingAt;
+        private static bool clerkGreetedForCurrentVisit;
 
         public PDM()
         {
@@ -22,6 +32,7 @@ namespace PDMCD4
                 Aborted += OnAborted;
 
                 Helper.LoadSettings();
+                logger.Log("Premium Deluxe Motorsport initialized. Logging enabled.");
                 Helper.BtnRotLeft = new InstructionalButton(Gxt("CMM_MOD_S6"), Helper.keyDoor);
                 Helper.BtnRotRight = new InstructionalButton(Gxt("CMOD_MOD_ROF"), Helper.keyRoof);
                 Helper.BtnCamera = new InstructionalButton(Gxt("CTRL_0"), Helper.keyCamera);
@@ -59,8 +70,169 @@ namespace PDMCD4
             Helper.PdmDoor = new Vector3(-55.99228f, -1098.51f, 25.423f);
             Helper.PdmBlip = World.CreateBlip(Helper.PdmDoor);
             Helper.PdmBlip.Sprite = BlipSprite.SportsCar;
-            Helper.PdmBlip.Color = BlipColor.Red;
+            Helper.PdmBlip.Color = BlipColor.RedLight;
             Helper.PdmBlip.IsShortRange = true;
+        }
+
+        private static Prop FindPdmChair()
+        {
+            Prop nearestChair = null;
+            float nearestChairDistance = float.MaxValue;
+
+            foreach (Prop prop in World.GetNearbyProps(Helper.PdmDoor, PdmPedChairSearchRadius, "v_corp_offchair"))
+            {
+                if (prop == null || !prop.Exists())
+                {
+                    continue;
+                }
+
+                prop.IsPositionFrozen = true;
+                float chairDistance = prop.Position.DistanceToSquared(Helper.PdmDoor);
+                if (chairDistance < nearestChairDistance)
+                {
+                    nearestChairDistance = chairDistance;
+                    nearestChair = prop;
+                }
+            }
+
+            return nearestChair;
+        }
+
+        private static Vector3 GetChairSeatPosition(Prop chair)
+        {
+            try
+            {
+                return Function.Call<Vector3>(Hash.GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS, chair, PdmChairSeatOffset.X, PdmChairSeatOffset.Y, PdmChairSeatOffset.Z);
+            }
+            catch
+            {
+                return new Vector3(chair.Position.X, chair.Position.Y, chair.Position.Z + PdmChairSeatOffset.Z);
+            }
+        }
+
+        private static float GetChairSeatHeading(Prop chair)
+        {
+            float heading = chair.Heading + 180.0f;
+            if (heading >= 360.0f)
+            {
+                heading -= 360.0f;
+            }
+
+            return heading;
+        }
+
+        private static void EnsurePdmPedSeated(Prop chair)
+        {
+            if (chair == null || !chair.Exists())
+            {
+                return;
+            }
+
+            Vector3 seatPosition = GetChairSeatPosition(chair);
+            float seatHeading = GetChairSeatHeading(chair);
+            int currentTime = Game.GameTime;
+            bool createdPed = false;
+
+            if (Helper.pdmPed == null || !Helper.pdmPed.Exists() || Helper.pdmPed.IsDead)
+            {
+                try { Helper.pdmPed?.Delete(); } catch { }
+                Helper.pdmPed = World.CreatePed(PedHash.Hipster01AFY, seatPosition, seatHeading);
+                if (Helper.pdmPed == null || !Helper.pdmPed.Exists())
+                {
+                    return;
+                }
+
+                Helper.pdmPed.IsPersistent = true;
+                createdPed = true;
+            }
+
+            Helper.pdmPed.BlockPermanentEvents = true;
+            Helper.pdmPed.KeepTaskWhenMarkedAsNoLongerNeeded = true;
+
+            try { Helper.pdmPed.CanRagdoll = false; } catch { }
+            try { Function.Call(Hash.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS, Helper.pdmPed, true); } catch { }
+
+            bool isUsingSeatScenario = false;
+            bool isRagdoll = false;
+            bool isGettingIntoVehicle = false;
+            float distanceToSeatSquared = Helper.pdmPed.Position.DistanceToSquared(seatPosition);
+
+            try { isUsingSeatScenario = Function.Call<bool>(Hash.IS_PED_USING_SCENARIO, Helper.pdmPed, "PROP_HUMAN_SEAT_CHAIR_UPRIGHT"); } catch { }
+            try { isRagdoll = Function.Call<bool>(Hash.IS_PED_RAGDOLL, Helper.pdmPed); } catch { }
+            try { isGettingIntoVehicle = Function.Call<bool>(Hash.IS_PED_GETTING_INTO_A_VEHICLE, Helper.pdmPed); } catch { }
+
+            bool forceImmediateSeat = createdPed || isRagdoll || distanceToSeatSquared > (PdmPedSeatSnapDistance * PdmPedSeatSnapDistance);
+            bool canRetrySeatTask = currentTime >= pdmPedNextSeatRetryAt;
+            bool shouldSeat = forceImmediateSeat || (!isUsingSeatScenario && !isGettingIntoVehicle && canRetrySeatTask);
+
+            if (!shouldSeat)
+            {
+                return;
+            }
+
+            Function.Call(Hash.CLEAR_PED_TASKS_IMMEDIATELY, Helper.pdmPed);
+            Function.Call(Hash.SET_ENTITY_COORDS_NO_OFFSET, Helper.pdmPed, seatPosition.X, seatPosition.Y, seatPosition.Z, false, false, false);
+            Helper.pdmPed.Heading = seatHeading;
+
+            Function.Call(
+                Hash.TASK_START_SCENARIO_AT_POSITION,
+                Helper.pdmPed,
+                "PROP_HUMAN_SEAT_CHAIR_UPRIGHT",
+                seatPosition.X,
+                seatPosition.Y,
+                seatPosition.Z,
+                seatHeading,
+                -1,
+                true,
+                true);
+
+            pdmPedNextSeatRetryAt = currentTime + PdmPedSeatRetryIntervalMs;
+        }
+
+
+        private static void ResetClerkGreetingState()
+        {
+            clerkGreetedForCurrentVisit = false;
+        }
+
+        private static void TryGreetPlayerFromClerk()
+        {
+            if (Helper.GPC == null || !Helper.GPC.Exists() || Helper.GPC.IsDead || Helper.GPC.IsInVehicle())
+            {
+                return;
+            }
+
+            if (Helper.pdmPed == null || !Helper.pdmPed.Exists() || Helper.pdmPed.IsDead)
+            {
+                return;
+            }
+
+            if (!Helper.poly.IsInInterior(Helper.GPC.Position))
+            {
+                ResetClerkGreetingState();
+                return;
+            }
+
+            if (clerkGreetedForCurrentVisit || Game.GameTime < pdmPedNextGreetingAt)
+            {
+                return;
+            }
+
+            if (Helper.GPC.Position.DistanceToSquared(Helper.PdmDoor) > (PdmDoorGreetingDistance * PdmDoorGreetingDistance))
+            {
+                return;
+            }
+
+            try
+            {
+                Function.Call(Hash.PLAY_PED_AMBIENT_SPEECH_NATIVE, Helper.pdmPed, "GENERIC_HI", "SPEECH_PARAMS_FORCE_NORMAL_CLEAR");
+                clerkGreetedForCurrentVisit = true;
+                pdmPedNextGreetingAt = Game.GameTime + PdmPedGreetingCooldownMs;
+            }
+            catch (Exception ex)
+            {
+                logger.Log("Error Clerk Greeting " + ex.Message + " " + ex.StackTrace);
+            }
         }
 
         public void PDM_OnTick(object o, EventArgs e)
@@ -87,35 +259,24 @@ namespace PDMCD4
                 {
                     if (Helper.PdmDoorDist < 10.0f)
                     {
-                        if (Helper.pdmPed == null)
-                        {
-                            Prop[] chairs = World.GetNearbyProps(Helper.PdmDoor, 3.0f, "v_corp_offchair");
-                            Prop chair = null;
-                            foreach (Prop prop in chairs)
-                            {
-                                chair = prop;
-                                chair.IsPositionFrozen = true;
-                            }
-
-                            Helper.pdmPed = World.CreatePed(PedHash.Hipster01AFY, Helper.PdmDoor, 219.5891f);
-                            Helper.pdmPed.IsPersistent = true;
-                            if (chair != null)
-                            {
-                                Helper.pdmPed.Task.StartScenarioAtPosition(
-                                    "PROP_HUMAN_SEAT_CHAIR_UPRIGHT",
-                                    new Vector3(chair.Position.X, chair.Position.Y, chair.Position.Z + 0.46f),
-                                    chair.Heading);
-                            }
-                        }
-
-                        Helper.pdmPed.Task.LookAt(Helper.GPC);
-                        Helper.pdmPed.KeepTaskWhenMarkedAsNoLongerNeeded = true;
+                        Prop chair = FindPdmChair();
+                        EnsurePdmPedSeated(chair);
                     }
                 }
                 catch (Exception ex)
                 {
                     try { Helper.pdmPed?.Delete(); } catch { }
+                    pdmPedNextSeatRetryAt = 0;
                     logger.Log("Error Create Ped " + ex.Message + " " + ex.StackTrace);
+                }
+
+                if (Helper.poly.IsInInterior(Helper.GPC.Position))
+                {
+                    TryGreetPlayerFromClerk();
+                }
+                else
+                {
+                    ResetClerkGreetingState();
                 }
 
                 if (!Helper.GPC.IsInVehicle() && !Helper.GPC.IsDead && Helper.PdmDoorDist < 3.0f && Helper.GP.Wanted.WantedLevel == 0 && Helper.TaskScriptStatus == -1)
@@ -138,7 +299,7 @@ namespace PDMCD4
                         GtaScreen.ShowSubtitle("$" + Math.Round(penalty).ToString("###,###") + Helper.GetLangEntry("HELP_PENALTY"));
                     }
 
-                    MenuHelper.ConfirmMenu.Visible = true;
+                    MenuHelper.ShowOnly(MenuHelper.ConfirmMenu);
                     Helper.VehPreview.IsUndriveable = true;
                     Helper.VehPreview.LockStatus = VehicleLockStatus.IgnoredByPlayer;
                     Helper.VehPreview.Position = Helper.VehPreviewPos;
@@ -164,7 +325,7 @@ namespace PDMCD4
                         Notification.PostTicker("$" + Math.Round(penalty).ToString("###,###") + Helper.GetLangEntry("HELP_PENALTY"), false);
                     }
 
-                    MenuHelper.ConfirmMenu.Visible = true;
+                    MenuHelper.ShowOnly(MenuHelper.ConfirmMenu);
                     Helper.VehPreview.IsUndriveable = true;
                     Helper.VehPreview.LockStatus = VehicleLockStatus.IgnoredByPlayer;
                     Helper.VehPreview.Position = Helper.VehPreviewPos;
@@ -198,16 +359,21 @@ namespace PDMCD4
                     GtaScreen.FadeIn(200);
                     Helper.SelectedVehicle = Helper.optLastVehName;
                     Helper.PlayerLastPos = Helper.GPC.Position;
+                    MenuHelper.CleanupVehicleViewerArea();
                     Helper.VehPreview?.Delete();
                     Helper.VehPreview = Helper.CreateVehicleFromHash(Helper.optLastVehHash, Helper.VehPreviewPos, 6.122209f);
                     Helper.UpdateVehPreview();
                     Helper.wsCamera.RepositionFor(Helper.VehPreview);
                     Helper.VehicleName = Helper.SelectedVehicle;
+                    if (Helper.VehPreview != null && Helper.VehPreview.Exists())
+                    {
+                        Helper.VehiclePrice = MenuHelper.ResolveVehiclePrice(Helper.VehPreview.Model.Hash, Helper.VehicleName);
+                    }
                     Helper.ShowVehicleName = true;
                     Helper.VehPreview.Heading = Helper.Radius;
                     Helper.VehPreview.LockStatus = VehicleLockStatus.IgnoredByPlayer;
                     Helper.VehPreview.DirtLevel = 0f;
-                    MenuHelper.MainMenu.Visible = true;
+                    MenuHelper.ShowOnly(MenuHelper.MainMenu);
                 }
 
                 if (MenuHelper._menuPool.AreAnyVisible)
@@ -299,6 +465,9 @@ namespace PDMCD4
                 Helper.PdmBlip?.Delete();
                 GtaScreen.FadeIn(200);
                 Helper.pdmPed?.Delete();
+                pdmPedNextSeatRetryAt = 0;
+                pdmPedNextGreetingAt = 0;
+                clerkGreetedForCurrentVisit = false;
             }
             catch (Exception ex)
             {

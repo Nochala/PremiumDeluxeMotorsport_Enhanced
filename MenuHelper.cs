@@ -1,15 +1,16 @@
-using System;
-using System.Collections.Generic;
 using GTA;
-using GTA.UI;
-using GtaScreen = GTA.UI.Screen;
 using GTA.Native;
+using GTA.UI;
 using LemonUI;
 using LemonUI.Menus;
 using LemonUI.Scaleform;
 using LemonUI.Tools;
+using System;
+using System.Collections.Generic;
+using GameScreen = LemonUI.Tools.GameScreen;
+using GtaScreen = GTA.UI.Screen;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     public static class MenuHelper
     {
@@ -59,7 +60,136 @@ namespace PDMCD4
         public static string[] Parameters = { "[name]", "[price]", "[model]", "[gxt]", "[make]" };
         public static ObjectPool _menuPool;
 
+        private static readonly List<NativeMenu> RegisteredMenus = new List<NativeMenu>();
+        private static readonly Dictionary<NativeMenu, string> RegisteredMenuTitles = new Dictionary<NativeMenu, string>();
+        private static bool suppressCloseHandlers;
+        private const string SelectionMarker = ">>";
+        private static readonly Dictionary<NativeItem, string> PreservedSubmenuAltTitles = new Dictionary<NativeItem, string>();
+        private const float ViewerSpawnCleanupSearchRadius = 6.0f;
+        private const float ViewerSpawnCleanupDeleteRadius = 2.9f;
+
         private static string Gxt(string key) => Game.GetLocalizedString(key);
+
+        private static MenuMouseBehavior GetConfiguredMouseBehavior()
+        {
+            return Helper.optEnableMouse ? MenuMouseBehavior.Movement : MenuMouseBehavior.Disabled;
+        }
+
+        private static bool IsCursorInsideMenuArea()
+        {
+            System.Drawing.PointF topLeft = SafeZone.GetSafePosition(new System.Drawing.PointF(0f, 0f));
+            System.Drawing.SizeF size = new System.Drawing.SizeF(431f, 550f);
+            return GameScreen.IsCursorInArea(topLeft, size);
+        }
+
+        public static void RefreshMouseBehaviors()
+        {
+            bool anyMenuVisible = _menuPool != null && _menuPool.AreAnyVisible;
+            bool cameraDragging = Helper.wsCamera != null && Helper.wsCamera.IsDragging;
+            bool leftClickOutsideMenu = false;
+
+            if (Helper.optEnableMouse && anyMenuVisible && !cameraDragging)
+            {
+                bool attackPressed =
+                    Game.IsControlPressed(Control.Attack) ||
+                    Function.Call<bool>(Hash.IS_DISABLED_CONTROL_PRESSED, 0, (int)Control.Attack);
+
+                if (attackPressed)
+                {
+                    leftClickOutsideMenu = !IsCursorInsideMenuArea();
+                }
+            }
+
+            MenuMouseBehavior desired = (Helper.optEnableMouse && !cameraDragging && !leftClickOutsideMenu)
+                ? MenuMouseBehavior.Movement
+                : MenuMouseBehavior.Disabled;
+
+            for (int i = 0; i < RegisteredMenus.Count; i++)
+            {
+                NativeMenu menu = RegisteredMenus[i];
+                if (menu != null && menu.MouseBehavior != desired)
+                {
+                    menu.MouseBehavior = desired;
+                }
+            }
+        }
+
+        public static void CleanupVehicleViewerArea()
+        {
+            try
+            {
+                Vehicle[] nearbyVehicles = World.GetNearbyVehicles(Helper.VehPreviewPos, ViewerSpawnCleanupSearchRadius);
+                if (nearbyVehicles == null || nearbyVehicles.Length == 0)
+                {
+                    return;
+                }
+
+                int currentPreviewHandle = (Helper.VehPreview != null && Helper.VehPreview.Exists()) ? Helper.VehPreview.Handle : 0;
+                float deleteDistanceSquared = ViewerSpawnCleanupDeleteRadius * ViewerSpawnCleanupDeleteRadius;
+
+                foreach (Vehicle vehicle in nearbyVehicles)
+                {
+                    if (vehicle == null || !vehicle.Exists())
+                    {
+                        continue;
+                    }
+
+                    if (vehicle.Handle == currentPreviewHandle)
+                    {
+                        continue;
+                    }
+
+                    if (vehicle.Position.DistanceToSquared(Helper.VehPreviewPos) > deleteDistanceSquared)
+                    {
+                        continue;
+                    }
+
+                    if (Helper.GPC != null && Helper.GPC.Exists() && Helper.GPC.IsInVehicle(vehicle))
+                    {
+                        continue;
+                    }
+
+                    try { vehicle.IsPersistent = false; } catch { }
+                    try { vehicle.MarkAsNoLongerNeeded(); } catch { }
+                    try { vehicle.Delete(); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log("Error CleanupVehicleViewerArea " + ex.Message + " " + ex.StackTrace);
+            }
+        }
+
+        public static int ResolveVehiclePrice(int modelHash, string fallbackVehicleName = null)
+        {
+            try
+            {
+                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
+                {
+                    Reader format = new Reader(file, Parameters);
+                    for (int ii = 0; ii < format.Count; ii++)
+                    {
+                        string modelName = format[ii]["model"];
+                        Model model = new Model(modelName);
+                        if (!model.IsValid || model.Hash != modelHash)
+                        {
+                            continue;
+                        }
+
+                        if (decimal.TryParse(format[ii]["price"], out decimal parsedPrice))
+                        {
+                            return (int)parsedPrice;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log("Error ResolveVehiclePrice " + ex.Message + " " + ex.StackTrace);
+            }
+
+            return Helper.VehiclePrice > 0 ? Helper.VehiclePrice : 0;
+        }
 
         private static string LocalizedLicensePlate(LicensePlateStyle plateStyle)
         {
@@ -87,6 +217,96 @@ namespace PDMCD4
             return !string.IsNullOrEmpty(value) && value.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        private static string CleanMenuText(string value, string fallback = null)
+        {
+            if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "NULL", StringComparison.OrdinalIgnoreCase))
+            {
+                return fallback ?? "Unnamed";
+            }
+
+            return value;
+        }
+
+        private static string NormalizeAltTitle(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            return value
+                .Replace("~s~", string.Empty)
+                .Replace("~w~", string.Empty)
+                .Replace("~g~", string.Empty)
+                .Replace("~b~", string.Empty)
+                .Replace("~y~", string.Empty)
+                .Replace("~r~", string.Empty)
+                .Trim();
+        }
+
+        private static bool IsSelectionMarkerAltTitle(string value)
+        {
+            string normalized = NormalizeAltTitle(value);
+            return normalized == SelectionMarker || normalized == "●" || normalized == "■" || normalized == "□" || normalized == "*";
+        }
+
+        private static void RememberSubmenuAltTitle(NativeItem item)
+        {
+            if (item is NativeSubmenuItem && item != null && !PreservedSubmenuAltTitles.ContainsKey(item))
+            {
+                PreservedSubmenuAltTitles[item] = item.AltTitle ?? string.Empty;
+            }
+        }
+
+        private static void RestoreSubmenuAltTitle(NativeItem item)
+        {
+            if (item is NativeSubmenuItem && item != null && PreservedSubmenuAltTitles.TryGetValue(item, out string altTitle))
+            {
+                item.AltTitle = altTitle ?? string.Empty;
+            }
+        }
+
+        private static void RestoreSubmenuAltTitles(NativeMenu menu)
+        {
+            if (menu == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < menu.Items.Count; i++)
+            {
+                RestoreSubmenuAltTitle(menu.Items[i]);
+            }
+        }
+
+        private static void ClearSelectionMarkers(NativeMenu menu)
+        {
+            if (menu == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < menu.Items.Count; i++)
+            {
+                NativeItem item = menu.Items[i];
+                if (item == null)
+                {
+                    continue;
+                }
+
+                if (item is NativeSubmenuItem)
+                {
+                    RestoreSubmenuAltTitle(item);
+                    continue;
+                }
+
+                if (IsSelectionMarkerAltTitle(item.AltTitle))
+                {
+                    item.AltTitle = string.Empty;
+                }
+            }
+        }
+
         private static void FadeOut(int time) => GtaScreen.FadeOut(time);
 
         private static void FadeIn(int time) => GtaScreen.FadeIn(time);
@@ -104,67 +324,164 @@ namespace PDMCD4
 
         public static void CreateMenus()
         {
-            ItemCustomize = new NativeItem(Helper.GetLangEntry("BTN_CUSTOMIZE"));
-            ItemConfirm = new NativeItem(Gxt("ITEM_YES"));
-            ItemColor = new NativeItem(Gxt("IB_COLOR"), Gxt("CMOD_MOD_6_D"));
-            ItemClassicColor = new NativeItem(Gxt("CMOD_COL1_1"), Gxt("CMOD_MOD_6_D"));
-            ItemClassicColor2 = new NativeItem(Gxt("CMOD_COL1_1"), Gxt("CMOD_MOD_6_D"));
-            ItemMetallicColor = new NativeItem(Gxt("CMOD_COL1_3"), Gxt("CMOD_MOD_6_D"));
-            ItemMetallicColor2 = new NativeItem(Gxt("CMOD_COL1_3"), Gxt("CMOD_MOD_6_D"));
-            ItemMetalColor = new NativeItem(Gxt("CMOD_COL1_4"), Gxt("CMOD_MOD_6_D"));
-            ItemMetalColor2 = new NativeItem(Gxt("CMOD_COL1_4"), Gxt("CMOD_MOD_6_D"));
-            ItemMatteColor = new NativeItem(Gxt("CMOD_COL1_5"), Gxt("CMOD_MOD_6_D"));
-            ItemMatteColor2 = new NativeItem(Gxt("CMOD_COL1_5"), Gxt("CMOD_MOD_6_D"));
-            ItemChromeColor = new NativeItem(Gxt("CMOD_COL1_0"), Gxt("CMOD_MOD_6_D"));
-            ItemChromeColor2 = new NativeItem(Gxt("CMOD_COL1_0"), Gxt("CMOD_MOD_6_D"));
-            ItemCPriColor = new NativeItem(Helper.GetLangEntry("BTN_CUSTOM_PRIMARY"), Gxt("CMOD_MOD_6_D"));
-            ItemCSecColor = new NativeItem(Helper.GetLangEntry("BTN_CUSTOM_SECONDARY"), Gxt("CMOD_MOD_6_D"));
-            ItemPriColor = new NativeItem(Gxt("CMOD_COL0_0"), Gxt("CMOD_MOD_6_D"));
-            ItemSecColor = new NativeItem(Gxt("CMOD_COL0_1"), Gxt("CMOD_MOD_6_D"));
-            ItemPeaColor = new NativeItem(Gxt("CMOD_COL1_6"), Gxt("CMOD_MOD_6_D"));
-            ItemPlate = new NativeItem(Gxt("CMOD_MOD_PLA"), Gxt("CMOD_MOD_6_D"));
+            ItemCustomize = new NativeItem(CleanMenuText(Helper.GetLangEntry("BTN_CUSTOMIZE"), "Customize"));
+            ItemConfirm = new NativeItem(CleanMenuText(Gxt("ITEM_YES"), "Confirm"));
+            ItemColor = new NativeItem(CleanMenuText(Gxt("IB_COLOR"), "Color"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemClassicColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_1"), "Classic"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemClassicColor2 = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_1"), "Classic"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemMetallicColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_3"), "Metallic"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemMetallicColor2 = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_3"), "Metallic"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemMetalColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_4"), "Metal"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemMetalColor2 = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_4"), "Metal"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemMatteColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_5"), "Matte"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemMatteColor2 = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_5"), "Matte"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemChromeColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_0"), "Chrome"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemChromeColor2 = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_0"), "Chrome"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemCPriColor = new NativeItem(CleanMenuText(Helper.GetLangEntry("BTN_CUSTOM_PRIMARY"), "Custom Primary"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemCSecColor = new NativeItem(CleanMenuText(Helper.GetLangEntry("BTN_CUSTOM_SECONDARY"), "Custom Secondary"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemPriColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL0_0"), "Primary Color"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemSecColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL0_1"), "Secondary Color"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemPeaColor = new NativeItem(CleanMenuText(Gxt("CMOD_COL1_6"), "Pearlescent"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
+            ItemPlate = new NativeItem(CleanMenuText(Gxt("CMOD_MOD_PLA"), "Plate Style"), CleanMenuText(Gxt("CMOD_MOD_6_D"), string.Empty));
 
             CreateCategoryMenu();
             CreateConfirmMenu();
             CreateCustomizeMenu();
             CreateColorCategory();
-            PlateMenu = NewMenu(Gxt("CMOD_MOD_PLA"), true, CustomiseMenu, ItemPlate);
+            CustomiseMenu.Add(new NativeItem(CleanMenuText(Gxt("PERSO_MOD_PER"), "Performance"), CleanMenuText(Gxt("IE_MOD_OBJ4"), string.Empty)));
+            CustomiseMenu.Add(new NativeItem(CleanMenuText(Helper.GetLangEntry("BTN_PLATE_NUMBER_NAME"), "Plate Number"), CleanMenuText(Gxt("IE_MOD_OBJ2"), string.Empty)));
+            PlateMenu = NewMenu(CleanMenuText(Gxt("CMOD_MOD_PLA"), "Plate Style"), true, CustomiseMenu, ItemPlate);
             CreatePrimaryColor();
             CreateSecondaryColor();
-            CPriColorMenu = NewMenu(Helper.GetLangEntry("BTN_CUSTOM_PRIMARY"), true, ColorMenu, ItemCPriColor);
-            CSecColorMenu = NewMenu(Helper.GetLangEntry("BTN_CUSTOM_SECONDARY"), true, ColorMenu, ItemCSecColor);
-            ClassicColorMenu = NewMenu(Gxt("CMOD_COL1_1"), true, PriColorMenu, ItemClassicColor);
-            MetallicColorMenu = NewMenu(Gxt("CMOD_COL1_3"), true, PriColorMenu, ItemMetallicColor);
-            MetalColorMenu = NewMenu(Gxt("CMOD_COL1_4"), true, PriColorMenu, ItemMetalColor);
-            MatteColorMenu = NewMenu(Gxt("CMOD_COL1_5"), true, PriColorMenu, ItemMatteColor);
-            ChromeColorMenu = NewMenu(Gxt("CMOD_COL1_0"), true, PriColorMenu, ItemChromeColor);
-            PeaColorMenu = NewMenu(Gxt("CMOD_COL1_6"), true, PriColorMenu, ItemPeaColor);
-            ClassicColorMenu2 = NewMenu(Gxt("CMOD_COL1_1"), true, SecColorMenu, ItemClassicColor2);
-            MetallicColorMenu2 = NewMenu(Gxt("CMOD_COL1_3"), true, SecColorMenu, ItemMetallicColor2);
-            MetalColorMenu2 = NewMenu(Gxt("CMOD_COL1_4"), true, SecColorMenu, ItemMetalColor2);
-            MatteColorMenu2 = NewMenu(Gxt("CMOD_COL1_5"), true, SecColorMenu, ItemMatteColor2);
-            ChromeColorMenu2 = NewMenu(Gxt("CMOD_COL1_0"), true, SecColorMenu, ItemChromeColor2);
+            CPriColorMenu = NewMenu(CleanMenuText(Helper.GetLangEntry("BTN_CUSTOM_PRIMARY"), "Custom Primary"), true, ColorMenu, ItemCPriColor);
+            CSecColorMenu = NewMenu(CleanMenuText(Helper.GetLangEntry("BTN_CUSTOM_SECONDARY"), "Custom Secondary"), true, ColorMenu, ItemCSecColor);
+            ClassicColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL1_1"), "Classic"), true, PriColorMenu, ItemClassicColor);
+            MetallicColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL1_3"), "Metallic"), true, PriColorMenu, ItemMetallicColor);
+            MatteColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL1_5"), "Matte"), true, PriColorMenu, ItemMatteColor);
+            MetalColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL1_4"), "Metal"), true, PriColorMenu, ItemMetalColor);
+            ChromeColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL1_0"), "Chrome"), true, PriColorMenu, ItemChromeColor);
+            PeaColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL1_6"), "Pearlescent"), true, PriColorMenu, ItemPeaColor);
+            ClassicColorMenu2 = NewMenu(CleanMenuText(Gxt("CMOD_COL1_1"), "Classic"), true, SecColorMenu, ItemClassicColor2);
+            MetallicColorMenu2 = NewMenu(CleanMenuText(Gxt("CMOD_COL1_3"), "Metallic"), true, SecColorMenu, ItemMetallicColor2);
+            MatteColorMenu2 = NewMenu(CleanMenuText(Gxt("CMOD_COL1_5"), "Matte"), true, SecColorMenu, ItemMatteColor2);
+            MetalColorMenu2 = NewMenu(CleanMenuText(Gxt("CMOD_COL1_4"), "Metal"), true, SecColorMenu, ItemMetalColor2);
+            ChromeColorMenu2 = NewMenu(CleanMenuText(Gxt("CMOD_COL1_0"), "Chrome"), true, SecColorMenu, ItemChromeColor2);
+        }
+
+        private static void RegisterMenu(NativeMenu menu, string title = null)
+        {
+            if (menu == null)
+            {
+                return;
+            }
+
+            if (!RegisteredMenus.Contains(menu))
+            {
+                RegisteredMenus.Add(menu);
+            }
+
+            string cleanTitle = CleanMenuText(title, null);
+            if (!string.IsNullOrWhiteSpace(cleanTitle))
+            {
+                RegisteredMenuTitles[menu] = cleanTitle;
+            }
+            else if (!RegisteredMenuTitles.ContainsKey(menu))
+            {
+                RegisteredMenuTitles[menu] = "Menu";
+            }
+        }
+
+        public static NativeMenu GetVisibleMenu()
+        {
+            for (int i = 0; i < RegisteredMenus.Count; i++)
+            {
+                NativeMenu menu = RegisteredMenus[i];
+                if (menu != null && menu.Visible)
+                {
+                    return menu;
+                }
+            }
+
+            return null;
+        }
+
+        public static string GetVisibleMenuTitle()
+        {
+            NativeMenu menu = GetVisibleMenu();
+            if (menu != null && RegisteredMenuTitles.TryGetValue(menu, out string title))
+            {
+                return CleanMenuText(title, string.Empty);
+            }
+
+            return string.Empty;
+        }
+
+        private static void RemoveDuplicateParentRows(NativeMenu parentMenu, NativeItem parentItem, string fallbackTitle)
+        {
+            if (parentMenu == null)
+            {
+                return;
+            }
+
+            string targetTitle = CleanMenuText(parentItem?.Title, fallbackTitle);
+            for (int i = parentMenu.Items.Count - 1; i >= 0; i--)
+            {
+                NativeItem existing = parentMenu.Items[i];
+                if (existing == null)
+                {
+                    continue;
+                }
+
+                bool sameReference = parentItem != null && object.ReferenceEquals(existing, parentItem);
+                bool sameTitle = string.Equals(CleanMenuText(existing.Title, string.Empty), targetTitle, StringComparison.OrdinalIgnoreCase);
+                bool isSubmenuItem = existing is NativeSubmenuItem;
+
+                if ((sameReference || sameTitle) && !isSubmenuItem)
+                {
+                    parentMenu.Items.RemoveAt(i);
+                }
+            }
         }
 
         private static NativeMenu NewMenu(string title, bool showStats)
         {
-            NativeMenu menu = new NativeMenu(string.Empty, title)
+            NativeMenu menu = new NativeMenu(string.Empty, string.Empty)
             {
-                MouseBehavior = MenuMouseBehavior.Disabled,
+                MouseBehavior = GetConfiguredMouseBehavior(),
             };
             AddInstructionalButtons(menu);
             _menuPool ??= new ObjectPool();
             _menuPool.Add(menu);
+            RegisterMenu(menu, title);
             return menu;
         }
 
         private static NativeMenu NewMenu(string title, bool showStats, NativeMenu parentMenu, NativeItem parentItem)
         {
             NativeMenu menu = NewMenu(title, showStats);
-            NativeSubmenuItem sub = new NativeSubmenuItem(menu, parentMenu, parentItem.Title);
-            sub.Tag = parentItem.Tag;
+            RemoveDuplicateParentRows(parentMenu, parentItem, title);
+            NativeSubmenuItem sub = new NativeSubmenuItem(menu, parentMenu);
+            if (parentItem != null)
+            {
+                sub.Title = CleanMenuText(parentItem.Title, title);
+                sub.Description = CleanMenuText(parentItem.Description, string.Empty);
+                sub.Tag = parentItem.Tag;
+            }
+            else
+            {
+                sub.Title = CleanMenuText(title, "Submenu");
+                sub.Description = string.Empty;
+            }
+            sub.Activated += (sender, args) => ShowOnly(menu);
             parentMenu.Add(sub);
-            menu.Closed += (sender, args) => ModsMenuCloseHandler(sender as NativeMenu);
+            RememberSubmenuAltTitle(sub);
+            menu.Closed += (sender, args) =>
+            {
+                if (!suppressCloseHandlers)
+                {
+                    ModsMenuCloseHandler(sender as NativeMenu);
+                }
+            };
             menu.ItemActivated += (sender, args) => ModsMenuItemSelectHandler(sender as NativeMenu, args.Item, (sender as NativeMenu)?.SelectedIndex ?? 0);
             menu.SelectedIndexChanged += (sender, args) => ModsMenuIndexChangedHandler(sender as NativeMenu, args.Index);
             return menu;
@@ -176,6 +493,48 @@ namespace PDMCD4
             AddInstructionalButtonIfValid(menu, Helper.BtnRotRight);
             AddInstructionalButtonIfValid(menu, Helper.BtnCamera);
             AddInstructionalButtonIfValid(menu, Helper.BtnZoom);
+        }
+
+        public static void HideAllMenus()
+        {
+            try
+            {
+                suppressCloseHandlers = true;
+                for (int i = 0; i < RegisteredMenus.Count; i++)
+                {
+                    NativeMenu menu = RegisteredMenus[i];
+                    if (menu != null)
+                    {
+                        menu.Visible = false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log(ex.Message + " " + ex.StackTrace);
+            }
+            finally
+            {
+                suppressCloseHandlers = false;
+            }
+        }
+
+        public static void ShowOnly(NativeMenu menu)
+        {
+            try
+            {
+                HideAllMenus();
+                if (menu != null)
+                {
+                    RestoreSubmenuAltTitles(menu);
+                    menu.Visible = true;
+                    ResetSelection(menu);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log(ex.Message + " " + ex.StackTrace);
+            }
         }
 
         private static void ResetSelection(NativeMenu menu)
@@ -192,73 +551,66 @@ namespace PDMCD4
 
         public static void CreateCategoryMenu()
         {
-            MainMenu = NewMenu(Gxt("CMOD_MOD_T"), true);
+            MainMenu = NewMenu(CleanMenuText(Gxt("CMOD_MOD_T"), "Categories"), true);
             foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
             {
                 if (System.IO.File.Exists(file))
                 {
-                    itemCat = new NativeItem(Helper.GetLangEntry(System.IO.Path.GetFileNameWithoutExtension(file)));
-                    itemCat.Tag = Tuple.Create(System.IO.File.ReadAllLines(file).Length, System.IO.Path.GetFileNameWithoutExtension(file));
+                    string categoryKey = System.IO.Path.GetFileNameWithoutExtension(file);
+                    itemCat = new NativeItem(CleanMenuText(Helper.GetLangEntry(categoryKey), categoryKey));
+                    itemCat.Tag = Tuple.Create(System.IO.File.ReadAllLines(file).Length, categoryKey);
                     MainMenu.Add(itemCat);
                 }
             }
             ResetSelection(MainMenu);
             MainMenu.ItemActivated += (sender, args) => CategoryItemSelectHandler(sender as NativeMenu, args.Item, (sender as NativeMenu)?.SelectedIndex ?? 0);
-            MainMenu.Closed += (sender, args) => MenuCloseHandler(sender as NativeMenu);
+            MainMenu.Closed += (sender, args) =>
+            {
+                if (!suppressCloseHandlers)
+                {
+                    MenuCloseHandler(sender as NativeMenu);
+                }
+            };
         }
 
         public static void CreateConfirmMenu()
         {
-            ConfirmMenu = NewMenu(Helper.GetLangEntry("PURCHASE_ORDER"), true);
-            ConfirmMenu.Add(ItemCustomize);
-            ConfirmMenu.Add(new NativeItem(Helper.GetLangEntry("BTN_TEST_DRIVE")));
-            ConfirmMenu.Add(new NativeItem(Gxt("ITEM_YES")));
+            ConfirmMenu = NewMenu(CleanMenuText(Helper.GetLangEntry("PURCHASE_ORDER"), "Purchase Order"), true);
+            ConfirmMenu.Add(new NativeItem(CleanMenuText(Helper.GetLangEntry("BTN_TEST_DRIVE"), "Test Drive")));
+            ConfirmMenu.Add(new NativeItem(CleanMenuText(Gxt("ITEM_YES"), "Confirm")));
             ResetSelection(ConfirmMenu);
-            ConfirmMenu.Closed += (sender, args) => ConfirmCloseHandler(sender as NativeMenu);
+            ConfirmMenu.Closed += (sender, args) =>
+            {
+                if (!suppressCloseHandlers)
+                {
+                    ConfirmCloseHandler(sender as NativeMenu);
+                }
+            };
             ConfirmMenu.ItemActivated += (sender, args) => ItemSelectHandler(sender as NativeMenu, args.Item, (sender as NativeMenu)?.SelectedIndex ?? 0);
         }
 
         public static void CreateCustomizeMenu()
         {
-            CustomiseMenu = NewMenu(Helper.GetLangEntry("BTN_CUSTOMIZE").ToUpperInvariant(), true, ConfirmMenu, ItemCustomize);
-            CustomiseMenu.Add(ItemColor);
-            CustomiseMenu.Add(new NativeItem(Gxt("PERSO_MOD_PER"), Gxt("IE_MOD_OBJ4")));
-            CustomiseMenu.Add(new NativeItem(Helper.GetLangEntry("BTN_PLATE_NUMBER_NAME"), Gxt("IE_MOD_OBJ2")));
-            CustomiseMenu.Add(ItemPlate);
+            CustomiseMenu = NewMenu(CleanMenuText(Helper.GetLangEntry("BTN_CUSTOMIZE"), "Customize").ToUpperInvariant(), true, ConfirmMenu, ItemCustomize);
             ResetSelection(CustomiseMenu);
             CustomiseMenu.ItemActivated += (sender, args) => ItemSelectHandler(sender as NativeMenu, args.Item, (sender as NativeMenu)?.SelectedIndex ?? 0);
         }
 
         public static void CreateColorCategory()
         {
-            ColorMenu = NewMenu(Gxt("CMOD_COL1_T"), true, CustomiseMenu, ItemColor);
-            ColorMenu.Add(ItemPriColor);
-            ColorMenu.Add(ItemSecColor);
-            ColorMenu.Add(ItemCPriColor);
-            ColorMenu.Add(ItemCSecColor);
+            ColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL1_T"), "Colors"), true, CustomiseMenu, ItemColor);
             ResetSelection(ColorMenu);
         }
 
         public static void CreatePrimaryColor()
         {
-            PriColorMenu = NewMenu(Gxt("CMOD_COL2_T"), true, ColorMenu, ItemPriColor);
-            PriColorMenu.Add(ItemClassicColor);
-            PriColorMenu.Add(ItemMetallicColor);
-            PriColorMenu.Add(ItemMatteColor);
-            PriColorMenu.Add(ItemMetalColor);
-            PriColorMenu.Add(ItemChromeColor);
-            PriColorMenu.Add(ItemPeaColor);
+            PriColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL2_T"), "Primary Color"), true, ColorMenu, ItemPriColor);
             ResetSelection(PriColorMenu);
         }
 
         public static void CreateSecondaryColor()
         {
-            SecColorMenu = NewMenu(Gxt("CMOD_COL3_T"), true, ColorMenu, ItemSecColor);
-            SecColorMenu.Add(ItemClassicColor2);
-            SecColorMenu.Add(ItemMetallicColor2);
-            SecColorMenu.Add(ItemMatteColor2);
-            SecColorMenu.Add(ItemMetalColor2);
-            SecColorMenu.Add(ItemChromeColor2);
+            SecColorMenu = NewMenu(CleanMenuText(Gxt("CMOD_COL3_T"), "Secondary Color"), true, ColorMenu, ItemSecColor);
             ResetSelection(SecColorMenu);
         }
 
@@ -266,6 +618,10 @@ namespace PDMCD4
         {
             try
             {
+                if (suppressCloseHandlers)
+                {
+                    return;
+                }
                 Helper.TaskScriptStatus = -1;
                 if (Helper.SelectedVehicle != null)
                 {
@@ -277,6 +633,7 @@ namespace PDMCD4
                 Helper.HideHud = false;
                 Helper.VehicleName = null;
                 Helper.ShowVehicleName = false;
+                HideAllMenus();
                 ResetSelection(CustomiseMenu);
                 ResetSelection(ConfirmMenu);
                 ResetSelection(MainMenu);
@@ -291,7 +648,11 @@ namespace PDMCD4
         {
             try
             {
-                MainMenu.Visible = true;
+                if (suppressCloseHandlers)
+                {
+                    return;
+                }
+                ShowOnly(MainMenu);
                 ResetSelection(CustomiseMenu);
                 ResetSelection(ConfirmMenu);
                 ResetSelection(MainMenu);
@@ -304,10 +665,18 @@ namespace PDMCD4
 
         private static void MarkSelected(NativeItem item, bool selected)
         {
-            if (item != null)
+            if (item == null)
             {
-                item.AltTitle = selected ? "●" : string.Empty;
+                return;
             }
+
+            if (item is NativeSubmenuItem)
+            {
+                RestoreSubmenuAltTitle(item);
+                return;
+            }
+
+            item.AltTitle = selected ? SelectionMarker : string.Empty;
         }
 
         public static void RefreshColorMenuFor(NativeMenu menu, List<VehicleColor> colorList, string prisecpear)
@@ -390,7 +759,7 @@ namespace PDMCD4
                     case Helper.EnumTypes.NumberPlateType:
                         foreach (LicensePlateStyle enumItem in Enum.GetValues(typeof(LicensePlateStyle)))
                         {
-                            NativeItem item = new NativeItem(LocalizedLicensePlate(enumItem)) { Tag = enumItem };
+                            NativeItem item = new NativeItem(CleanMenuText(LocalizedLicensePlate(enumItem), enumItem.ToString())) { Tag = enumItem };
                             MarkSelected(item, Mods(Helper.VehPreview).LicensePlateStyle == enumItem);
                             menu.Add(item);
                         }
@@ -398,7 +767,7 @@ namespace PDMCD4
                     case Helper.EnumTypes.VehicleWindowTint:
                         foreach (VehicleWindowTint enumItem in Enum.GetValues(typeof(VehicleWindowTint)))
                         {
-                            NativeItem item = new NativeItem(Helper.LocalizedWindowsTint(enumItem)) { Tag = enumItem };
+                            NativeItem item = new NativeItem(CleanMenuText(Helper.LocalizedWindowsTint(enumItem), enumItem.ToString())) { Tag = enumItem };
                             MarkSelected(item, Mods(Helper.VehPreview).WindowTint == enumItem);
                             menu.Add(item);
                         }
@@ -446,8 +815,7 @@ namespace PDMCD4
             if (selectedItem.Title == Helper.VehicleName)
             {
                 Tuple<string, int, string, string> t = (Tuple<string, int, string, string>)selectedItem.Tag;
-                sender.Visible = false;
-                ConfirmMenu.Visible = true;
+                ShowOnly(ConfirmMenu);
                 Helper.VehicleName = selectedItem.Title;
                 Helper.optLastVehMake = t.Item4;
                 Helper.ShowVehicleName = true;
@@ -478,6 +846,7 @@ namespace PDMCD4
             {
                 Tuple<string, int, string, string> t = (Tuple<string, int, string, string>)sender.Items[index].Tag;
                 Helper.SelectedVehicle = t.Item3;
+                CleanupVehicleViewerArea();
                 Helper.VehPreview?.Delete();
                 if (sender.Items[index].Title.IndexOf("NULL", StringComparison.OrdinalIgnoreCase) < 0)
                 {
@@ -549,7 +918,7 @@ namespace PDMCD4
                         FadeOut(200);
                         Script.Wait(200);
                         Helper.GP.Money = Helper.PlayerCash - Helper.VehiclePrice;
-                        ConfirmMenu.Visible = false;
+                        HideAllMenus();
                         Helper.wsCamera.Stop();
                         Helper.DrawSpotLight = false;
                         Helper.VehPreview.IsUndriveable = false;
@@ -590,7 +959,7 @@ namespace PDMCD4
                     FadeOut(200);
                     Script.Wait(200);
                     Function.Call(Hash.TASK_WARP_PED_INTO_VEHICLE, Helper.GPC, Helper.VehPreview, -1);
-                    ConfirmMenu.Visible = false;
+                    HideAllMenus();
                     Helper.wsCamera.Stop();
                     Helper.DrawSpotLight = false;
                     Helper.VehPreview.IsUndriveable = false;
@@ -641,9 +1010,7 @@ namespace PDMCD4
             {
                 Tuple<int, string> t = (Tuple<int, string>)selectedItem.Tag;
                 CreateVehicleMenu($@".\scripts\PremiumDeluxeMotorsport\Vehicles\{t.Item2}.ini", Helper.GetLangEntry(t.Item2));
-                sender.Visible = false;
-                VehicleMenu.Visible = true;
-                ResetSelection(VehicleMenu);
+                ShowOnly(VehicleMenu);
             }
             catch (Exception ex)
             {
@@ -656,23 +1023,25 @@ namespace PDMCD4
             try
             {
                 Reader format = new Reader(file, Parameters);
+                if (VehicleMenu != null)
+                {
+                    VehicleMenu.Visible = false;
+                }
+
                 VehicleMenu = NewMenu(subtitle.ToUpperInvariant(), true);
                 for (int ii = 0; ii < format.Count; ii++)
                 {
                     int i = (format.Count - 1) - ii;
                     Helper.Price = decimal.TryParse(format[i]["price"], out decimal parsed) ? parsed : 0m;
-                    NativeItem item = new NativeItem($"{Gxt(format[i]["make"])} {Gxt(format[i]["gxt"])}")
+                    string makeName = CleanMenuText(Gxt(format[i]["make"]), format[i]["make"]);
+                    string modelName = CleanMenuText(Gxt(format[i]["gxt"]), format[i]["name"]);
+                    string fullVehicleName = CleanMenuText(($"{makeName} {modelName}").Trim(), format[i]["name"]);
+                    NativeItem item = new NativeItem(fullVehicleName)
                     {
                         AltTitle = "$" + Helper.Price.ToString("N0"),
-                        Tag = Tuple.Create(format[i]["model"], (int)Helper.Price, $"{Gxt(format[i]["make"])} {Gxt(format[i]["gxt"])}", format[i]["make"]),
+                        Tag = Tuple.Create(format[i]["model"], (int)Helper.Price, fullVehicleName, format[i]["make"]),
                     };
-                    if (item.Title.IndexOf("NULL", StringComparison.OrdinalIgnoreCase) >= 0) item.Title = Gxt(format[i]["gxt"]);
-                    if (item.Title.IndexOf("NULL", StringComparison.OrdinalIgnoreCase) >= 0) item.Title = format[i]["name"];
                     Model model = new Model(format[i]["model"]);
-                    if (Helper.hiddenSave.GetValue("VEHICLES", model.Hash.ToString(), 0) == 0)
-                    {
-                        item.AltTitle = item.AltTitle + " *";
-                    }
                     if (model.IsInCdImage && model.IsValid)
                     {
                         VehicleMenu.Add(item);
@@ -681,7 +1050,13 @@ namespace PDMCD4
                 ResetSelection(VehicleMenu);
                 VehicleMenu.ItemActivated += (sender, args) => VehicleSelectHandler(sender as NativeMenu, args.Item, (sender as NativeMenu)?.SelectedIndex ?? 0);
                 VehicleMenu.SelectedIndexChanged += (sender, args) => VehicleChangeHandler(sender as NativeMenu, args.Index);
-                VehicleMenu.Closed += (sender, args) => MainMenu.Visible = true;
+                VehicleMenu.Closed += (sender, args) =>
+                {
+                    if (!suppressCloseHandlers)
+                    {
+                        ShowOnly(MainMenu);
+                    }
+                };
             }
             catch (Exception ex)
             {
@@ -769,10 +1144,7 @@ namespace PDMCD4
                     return;
                 }
 
-                foreach (NativeItem i in sender.Items)
-                {
-                    i.AltTitle = string.Empty;
-                }
+                ClearSelectionMarkers(sender);
 
                 if (sender == ClassicColorMenu || sender == ChromeColorMenu || sender == MatteColorMenu || sender == MetalColorMenu)
                 {
@@ -857,6 +1229,10 @@ namespace PDMCD4
         {
             try
             {
+                if (suppressCloseHandlers)
+                {
+                    return;
+                }
                 if (Helper.VehPreview == null || Helper.lastVehMemory == null)
                 {
                     return;

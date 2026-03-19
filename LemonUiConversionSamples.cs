@@ -10,7 +10,7 @@ using LemonUI.Tools;
 
 using GtaFont = GTA.UI.Font;
 
-namespace PDMCD4
+namespace PremiumDeluxeRevamped
 {
     internal static class LemonUiConversionSamples
     {
