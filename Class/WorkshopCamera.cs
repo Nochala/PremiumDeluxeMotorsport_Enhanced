@@ -59,6 +59,12 @@ namespace PremiumDeluxeRevamped
         private Vector3 startValueRotation;
         private Vector3 endValueRotation;
 
+        private const float MinimumSafeCameraDistance = 0.35f;
+        private const float MaximumSafeCameraDistance = 16.0f;
+        private const float MinimumSafeCameraDepthOffset = 2.25f;
+        private const float MinimumValidStoredCameraDistance = 1.5f;
+        private const float MaximumValidStoredCameraDistance = 10.5f;
+
         public WorkshopCamera()
         {
             Camera.DeleteAllCameras();
@@ -107,7 +113,15 @@ namespace PremiumDeluxeRevamped
 
         public void Stop()
         {
+            _isDragging = false;
+            _dragOffset = PointF.Empty;
+
+            try { Function.Call((Hash)0x8DB8CFFD58B62552UL, 0); } catch { }
+
             StopRenderingCamera();
+
+            try { Function.Call(Hash.RENDER_SCRIPT_CAMS, false, false, 0, true, false, 0); } catch { }
+
             Camera.DeleteAllCameras();
             _mainCamera = null;
         }
@@ -125,13 +139,23 @@ namespace PremiumDeluxeRevamped
                 CutsceneManager.DirectionToRotation(lowrider.ForwardVector * -5.0f),
                 GameplayCamera.FieldOfView);
 
-            _mainCamera.PointAt(lowrider);
-            _mainCamera.Position = Helper.CameraPos;
-            _mainCamera.Rotation = Helper.CameraRot;
-            StartRenderingCamera(_mainCamera);
             _target = lowrider;
             _targetPos = lowrider.Position;
-            _cameraZoom = 5.0f;
+            _mainCamera.PointAt(lowrider);
+
+            if (IsValidStoredCameraPose(lowrider, Helper.CameraPos, Helper.CameraRot))
+            {
+                _mainCamera.Position = Helper.CameraPos;
+                _mainCamera.Rotation = Helper.CameraRot;
+            }
+            else
+            {
+                Helper.CameraPos = _mainCamera.Position;
+                Helper.CameraRot = _mainCamera.Rotation;
+            }
+
+            StartRenderingCamera(_mainCamera);
+            _cameraZoom = (_targetPos - _mainCamera.Position).Length();
             _internalCameraPosition = CameraPosition.Car;
             RotationMode = CameraRotationMode.Around;
             CameraClamp = new CameraClamp
@@ -147,6 +171,106 @@ namespace PremiumDeluxeRevamped
             PointF topLeft = SafeZone.GetSafePosition(new PointF(0f, 0f));
             SizeF size = new SizeF(431f, 550f);
             return GameScreen.IsCursorInArea(topLeft, size);
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static bool IsFiniteVector(Vector3 value)
+        {
+            return IsFinite(value.X) && IsFinite(value.Y) && IsFinite(value.Z);
+        }
+
+        private static bool IsValidStoredCameraPose(Entity target, Vector3 position, Vector3 rotation)
+        {
+            if (target == null || !target.Exists() || !IsFiniteVector(position) || !IsFiniteVector(rotation))
+            {
+                return false;
+            }
+
+            float distance = target.Position.DistanceTo(position);
+            if (distance < MinimumValidStoredCameraDistance || distance > MaximumValidStoredCameraDistance)
+            {
+                return false;
+            }
+
+            if (position.Z < target.Position.Z - 0.5f)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool IsCurrentCameraPoseSafe()
+        {
+            if (_mainCamera == null || _target == null || !_target.Exists() || !IsFiniteVector(_mainCamera.Position) || !IsFiniteVector(_mainCamera.Rotation))
+            {
+                return false;
+            }
+
+            Vector3 focus = _targetPos;
+            if (!IsFiniteVector(focus))
+            {
+                focus = _target.Position;
+            }
+
+            float distance = focus.DistanceTo(_mainCamera.Position);
+            if (distance < MinimumSafeCameraDistance || distance > MaximumSafeCameraDistance)
+            {
+                return false;
+            }
+
+            if (_mainCamera.Position.Z < focus.Z - MinimumSafeCameraDepthOffset)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private void RestoreSafeAroundCameraPose()
+        {
+            if (_mainCamera == null || _target == null || !_target.Exists())
+            {
+                return;
+            }
+
+            Vector3 focus = IsFiniteVector(_targetPos) ? _targetPos : _target.Position;
+            Vector3 backward = _target.ForwardVector * -1f;
+            if (!IsFiniteVector(backward) || backward.Length() < 0.001f)
+            {
+                backward = Vector3.WorldSouth;
+            }
+
+            float safeZoom = Clamp(_cameraZoom > 0.01f ? _cameraZoom : 5.0f, 1.0f, 6.5f);
+            Vector3 safePosition = focus + backward * safeZoom + Vector3.WorldUp * Math.Max(0.8f, safeZoom * 0.2f);
+
+            _mainCamera.StopPointing();
+            _mainCamera.Position = safePosition;
+            _mainCamera.PointAt(focus);
+
+            _isDragging = false;
+            _dragOffset = PointF.Empty;
+
+            try { Function.Call((Hash)0x8DB8CFFD58B62552UL, 0); } catch { }
+        }
+
+        private void EnsureCameraPoseIsSafe()
+        {
+            if (_mainCamera == null || RotationMode != CameraRotationMode.Around || MainCameraPosition == CameraPosition.Interior || IsLerping)
+            {
+                return;
+            }
+
+            if (IsCurrentCameraPoseSafe())
+            {
+                return;
+            }
+
+            RestoreSafeAroundCameraPose();
         }
 
         public void Update()
@@ -207,6 +331,8 @@ namespace PremiumDeluxeRevamped
             {
                 UpdateFirstPersonCamera();
             }
+
+            EnsureCameraPoseIsSafe();
 
             if (MainCameraPosition != CameraPosition.Interior)
             {
