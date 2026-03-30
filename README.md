@@ -27,7 +27,6 @@ ___________________________________
 - Added mouse support for selecting UI options with the mouse
 
 ### [ Planned Upcoming Features ]
-- Controller support
 - Sell vehicles at Premium Deluxe Motorsport
 - Function to search vehicles
 - Better Addon Vehicle Support
