@@ -28,10 +28,7 @@ ___________________________________
 
 ### [ Planned Upcoming Features ]
 - Sell vehicles at Premium Deluxe Motorsport
-- Function to search vehicles
 - Better Addon Vehicle Support
-- Add an option to disable performance upgrades
-- Function to make performance upgrades increase the price of a vehicle
   
 ## [ **CHANGELOG** ]
 **Patch v1.0.2**
