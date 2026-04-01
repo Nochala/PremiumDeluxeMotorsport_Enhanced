@@ -78,6 +78,25 @@ namespace PremiumDeluxeRevamped
         private const string CategoryActionSearchVehicles = "SEARCH_VEHICLES";
         private const int PerformanceUpgradePrice = 77500;
         private static int PreviewVehicleBasePrice;
+        public static int LegitimatePdmVehicleHandle { get; private set; }
+        public static int LegitimatePdmVehicleUntil { get; private set; }
+
+        public static void MarkLegitimatePdmVehicle(Vehicle vehicle, int durationMs)
+        {
+            LegitimatePdmVehicleHandle = (vehicle != null && vehicle.Exists()) ? vehicle.Handle : 0;
+            LegitimatePdmVehicleUntil = Game.GameTime + Math.Max(durationMs, 0);
+        }
+
+        public static bool IsLegitimatePdmVehicle(Vehicle vehicle)
+        {
+            return vehicle != null && vehicle.Exists() && Game.GameTime <= LegitimatePdmVehicleUntil && vehicle.Handle == LegitimatePdmVehicleHandle;
+        }
+
+        public static void ClearLegitimatePdmVehicle()
+        {
+            LegitimatePdmVehicleHandle = 0;
+            LegitimatePdmVehicleUntil = 0;
+        }
 
         private static string Gxt(string key) => Game.GetLocalizedString(key);
 
@@ -1383,6 +1402,7 @@ namespace PremiumDeluxeRevamped
                             Helper.VehPreview.LockStatus = VehicleLockStatus.Unlocked;
                             Function.Call(Hash.SET_VEHICLE_DOORS_SHUT, Helper.VehPreview, false);
                             Helper.VehPreview.Position = TestDriveSpawnPosition;
+                            MarkLegitimatePdmVehicle(Helper.VehPreview, 4000);
                             Function.Call(Hash.SET_PED_INTO_VEHICLE, Helper.GPC, Helper.VehPreview, -1);
                             Helper.VehPreview.MarkAsNoLongerNeeded();
                             Helper.VehPreview = null;

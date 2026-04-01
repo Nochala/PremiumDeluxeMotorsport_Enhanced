@@ -36,6 +36,10 @@ namespace PremiumDeluxeRevamped
         private static bool pdmStoreClosedByClerkDeath;
         private static bool playerWasInsidePdmLastTick;
         private static bool playerWasInVehicleLastTick;
+        private static int playerVehicleHandleLastTick;
+        private static int recentlyUsedPdmVehicleHandle;
+        private static int recentlyUsedPdmVehicleUntil;
+        private const int RecentlyUsedPdmVehicleGraceMs = 300000;
 
         public PDM()
         {
@@ -242,6 +246,27 @@ namespace PremiumDeluxeRevamped
             }
         }
 
+        private static void MarkRecentlyUsedPdmVehicleHandle(int vehicleHandle, int durationMs)
+        {
+            recentlyUsedPdmVehicleHandle = vehicleHandle;
+            recentlyUsedPdmVehicleUntil = Game.GameTime + Math.Max(durationMs, 0);
+        }
+
+        private static bool IsRecentlyUsedPdmVehicle(Vehicle vehicle)
+        {
+            return vehicle != null
+                && vehicle.Exists()
+                && recentlyUsedPdmVehicleHandle != 0
+                && vehicle.Handle == recentlyUsedPdmVehicleHandle
+                && Game.GameTime <= recentlyUsedPdmVehicleUntil;
+        }
+
+        private static void ClearRecentlyUsedPdmVehicle()
+        {
+            recentlyUsedPdmVehicleHandle = 0;
+            recentlyUsedPdmVehicleUntil = 0;
+        }
+
         private static void ReopenStoreIfSafe()
         {
             if (!pdmStoreClosedForCrime || Helper.GP == null || Helper.GPC == null || !Helper.GPC.Exists() || Helper.GPC.IsDead)
@@ -271,6 +296,7 @@ namespace PremiumDeluxeRevamped
 
             pdmStoreClosedForCrime = false;
             pdmStoreClosedByClerkDeath = false;
+            MenuHelper.ClearLegitimatePdmVehicle();
         }
 
         private static void HandlePdmCrimeState()
@@ -282,6 +308,23 @@ namespace PremiumDeluxeRevamped
 
             bool playerInsidePdm = Helper.poly.IsInInterior(Helper.GPC.Position);
             bool playerInVehicle = Helper.GPC.IsInVehicle();
+            Vehicle currentVehicle = null;
+
+            if (playerInVehicle)
+            {
+                try
+                {
+                    currentVehicle = Helper.GPC.CurrentVehicle;
+                }
+                catch
+                {
+                }
+            }
+
+            if (playerWasInsidePdmLastTick && playerWasInVehicleLastTick && !playerInVehicle && playerVehicleHandleLastTick != 0)
+            {
+                MarkRecentlyUsedPdmVehicleHandle(playerVehicleHandleLastTick, RecentlyUsedPdmVehicleGraceMs);
+            }
 
             if (Helper.pdmPed != null && Helper.pdmPed.Exists() && Helper.pdmPed.IsDead && !pdmStoreClosedForCrime)
             {
@@ -290,14 +333,23 @@ namespace PremiumDeluxeRevamped
             }
             else if (!pdmStoreClosedForCrime && playerInsidePdm && playerInVehicle && playerWasInsidePdmLastTick && !playerWasInVehicleLastTick && Helper.TestDrive != 2 && Helper.TestDrive != 3)
             {
-                EnsurePlayerWantedLevelAtLeast(PdmStoreCrimeWantedLevel);
-                CloseStoreForCrime(false);
+                if (!MenuHelper.IsLegitimatePdmVehicle(currentVehicle) && !IsRecentlyUsedPdmVehicle(currentVehicle))
+                {
+                    EnsurePlayerWantedLevelAtLeast(PdmStoreCrimeWantedLevel);
+                    CloseStoreForCrime(false);
+                }
             }
 
             ReopenStoreIfSafe();
 
             playerWasInsidePdmLastTick = playerInsidePdm;
             playerWasInVehicleLastTick = playerInVehicle;
+            playerVehicleHandleLastTick = (currentVehicle != null && currentVehicle.Exists()) ? currentVehicle.Handle : 0;
+
+            if (Game.GameTime > recentlyUsedPdmVehicleUntil)
+            {
+                ClearRecentlyUsedPdmVehicle();
+            }
         }
 
 
@@ -584,6 +636,8 @@ namespace PremiumDeluxeRevamped
                 pdmStoreClosedByClerkDeath = false;
                 playerWasInsidePdmLastTick = false;
                 playerWasInVehicleLastTick = false;
+                playerVehicleHandleLastTick = 0;
+                ClearRecentlyUsedPdmVehicle();
             }
             catch (Exception ex)
             {
